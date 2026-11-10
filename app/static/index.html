@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FireMon - Painel</title>
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --tx:#1d2330; --mut:#667085; --bd:#e3e6ea;
+          --red:#c62828; --redbg:#fdecea; --ok:#2e7d32; --okbg:#e8f5e9; --acc:#1f4fd1; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.45 system-ui, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--tx); }
+  header { background:#1d2330; color:#fff; padding:14px 20px; display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:20px; margin:0; } header span { color:#aab; font-size:13px; }
+  header a { color:#9db7ff; margin-left:auto; font-size:14px; }
+  main { max-width:1200px; margin:0 auto; padding:16px; display:grid; gap:16px; }
+  .setor { background:var(--card); border:1px solid var(--bd); border-radius:10px; padding:16px; }
+  .setor.alarme { border-color:var(--red); box-shadow:0 0 0 2px var(--redbg); }
+  .top { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:baseline; }
+  .top h2 { margin:0; font-size:18px; } .mut { color:var(--mut); font-size:13px; }
+  .badge { padding:2px 8px; border-radius:99px; font-size:12px; font-weight:600; }
+  .b-ok { background:var(--okbg); color:var(--ok); } .b-al { background:var(--redbg); color:var(--red); }
+  .clima { font-size:13px; margin:6px 0 10px; color:var(--mut); }
+  .cols { display:grid; grid-template-columns: 2fr 1fr; gap:16px; }
+  @media (max-width:800px){ .cols { grid-template-columns:1fr; } }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:6px 4px; border-bottom:1px solid var(--bd); }
+  th { font-size:12px; color:var(--mut); font-weight:600; }
+  tr.al td { color:var(--red); font-weight:600; }
+  input[type=number] { width:80px; padding:4px; border:1px solid var(--bd); border-radius:6px; }
+  button { padding:4px 10px; border-radius:6px; border:1px solid var(--bd); background:#fff; cursor:pointer; }
+  button.on { background:var(--red); color:#fff; border-color:var(--red); }
+  #log { background:#0f1420; color:#cfe; font:12px/1.4 ui-monospace, Consolas, monospace; padding:12px;
+         border-radius:10px; max-height:260px; overflow:auto; white-space:pre-wrap; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🔥 FireMon</h1><span>Monitoramento de incêndio via Webservices REST</span>
+  <a href="/docs">Documentação da API (Swagger)</a>
+</header>
+<main>
+  <div id="setores"></div>
+  <section>
+    <h3 style="margin:0 0 8px">Últimas respostas da API</h3>
+    <div id="log">Aguardando ações…</div>
+  </section>
+</main>
+<script>
+const API = "/api/v1";
+const $ = (s) => document.querySelector(s);
+const esc = (t) => String(t ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const climaCache = {};
+
+function log(metodo, url, corpo, resp) {
+  const linha = `${new Date().toLocaleTimeString()}  ${metodo} ${url}\n` +
+    (corpo ? `→ ${JSON.stringify(corpo)}\n` : "") + `← ${JSON.stringify(resp, null, 1)}\n\n`;
+  const el = $("#log");
+  el.textContent = (el.textContent.startsWith("Aguardando") ? "" : el.textContent);
+  el.textContent = linha + el.textContent;
+}
+
+async function chamar(metodo, url, corpo) {
+  const r = await fetch(API + url, { method: metodo,
+    headers: corpo ? { "Content-Type": "application/json" } : {},
+    body: corpo ? JSON.stringify(corpo) : undefined });
+  const dados = await r.json();
+  if (metodo !== "GET") log(metodo, API + url, corpo, dados);
+  return dados;
+}
+
+async function carregarClima(id) {
+  try {
+    const d = await chamar("GET", `/setores/${id}/clima`);
+    const c = d.clima;
+    climaCache[id] = c ? `🌡 ${c.temperatura_c} °C · 💧 ${c.umidade_relativa}% · 🌬 ${c.vento_kmh} km/h · ` +
+      `Índice de Angström ${c.indice_angstrom} → risco <b>${c.risco_incendio.replace("_"," ")}</b> ` +
+      `<span class="mut">(fonte: ${esc(c.fonte)})</span>` : `Clima indisponível: ${esc(d.mensagem)}`;
+  } catch { climaCache[id] = "Clima indisponível"; }
+  const el = document.getElementById("clima-" + id);
+  if (el) el.innerHTML = climaCache[id];
+}
+
+async function render() {
+  const [set, sen, atu] = await Promise.all([chamar("GET","/setores"), chamar("GET","/sensores"), chamar("GET","/atuadores")]);
+  $("#setores").innerHTML = set.setores.map(s => {
+    const sens = sen.sensores.filter(x => x.setor_id === s.id);
+    const atus = atu.atuadores.filter(x => x.setor_id === s.id);
+    return `<div class="setor ${s.em_alarme ? "alarme" : ""}">
+      <div class="top"><h2>${esc(s.nome)}</h2><span class="mut">${esc(s.descricao)}</span>
+        <span class="badge ${s.em_alarme ? "b-al" : "b-ok"}">${s.em_alarme ? "EM ALARME" : "Normal"}</span></div>
+      <div class="clima" id="clima-${s.id}">${climaCache[s.id] ?? "Consultando clima…"}</div>
+      <div class="cols">
+        <table><tr><th>Sensor</th><th>Tipo</th><th>Última leitura</th><th>Limite</th><th>Enviar leitura</th></tr>
+        ${sens.map(x => { const u = x.ultima_leitura; return `<tr class="${u && u.alarme ? "al" : ""}">
+          <td title="${esc(x.descricao)}">${esc(x.codigo)}</td><td>${esc(x.tipo)}</td>
+          <td>${u ? `${u.valor} ${esc(x.unidade)}` : "—"}</td><td>${x.limite_alarme}</td>
+          <td><input type="number" step="0.1" id="v-${esc(x.codigo)}" value="${u ? u.valor : 0}">
+              <button onclick="enviar('${esc(x.codigo)}')">Enviar</button></td></tr>`; }).join("")}
+        </table>
+        <table><tr><th>Atuador</th><th>Tipo</th><th>Estado</th></tr>
+        ${atus.map(a => `<tr><td title="${esc(a.descricao)}">${esc(a.codigo)}</td><td>${esc(a.tipo)}</td>
+          <td><button class="${a.estado === "ligado" ? "on" : ""}"
+            onclick="comandar('${esc(a.codigo)}','${a.estado === "ligado" ? "desligar" : "ligar"}')">${a.estado}</button></td></tr>`).join("")}
+        </table>
+      </div></div>`;
+  }).join("");
+  set.setores.forEach(s => { if (!(s.id in climaCache)) carregarClima(s.id); });
+}
+
+async function enviar(codigo) {
+  const valor = parseFloat(document.getElementById("v-" + codigo).value);
+  await chamar("POST", "/leituras", { sensor_codigo: codigo, valor });
+  render();
+}
+async function comandar(codigo, comando) {
+  await chamar("POST", `/atuadores/${codigo}/comando`, { comando });
+  render();
+}
+render();
+setInterval(render, 5000);
+</script>
+</body>
+</html>
